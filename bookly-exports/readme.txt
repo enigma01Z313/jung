@@ -1,4 +1,5 @@
-=== Bookly Exports ===
+=== Simyatech Bookly Reports ===
+Author: Farzin Ahamadi
 Requires at least: 5.6
 Tested up to: 6.6
 Requires PHP: 7.2

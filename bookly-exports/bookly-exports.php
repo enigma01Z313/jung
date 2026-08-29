@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Bookly Exports
+ * Plugin Name: Simyatech Bookly Reports
  * Description: Caches Bookly's approved appointments into a flat table and exports them to CSV, both in progress-tracked batches so a large history never times out.
  * Version:     1.0.0
- * Author:      Jung
+ * Author:      Farzin Ahamadi
  * Text Domain: bookly-exports
  */
 
