@@ -86,6 +86,8 @@ class Bookly_Exports_Admin {
                     'empty'       => __( 'There is nothing to export yet.', 'bookly-exports' ),
                     'failed'      => __( 'Something went wrong. Please try again.', 'bookly-exports' ),
                     'ofRecords'   => __( '%1$s of %2$s records', 'bookly-exports' ),
+                    'cacheData'   => __( 'Cache Data', 'bookly-exports' ),
+                    'exportCsv'   => __( 'Export CSV', 'bookly-exports' ),
                 ),
             )
         );
@@ -125,8 +127,9 @@ class Bookly_Exports_Admin {
                 </div>
 
                 <p>
-                    <button type="button" class="button button-primary button-hero" id="bookly-exports-run">
-                        <?php esc_html_e( 'Export CSV', 'bookly-exports' ); ?>
+                    <?php // Anything left to cache has to be cached first, so the button offers that step until the queue is empty. ?>
+                    <button type="button" class="button button-primary button-hero" id="bookly-exports-run" data-mode="<?php echo $pending > 0 ? 'cache' : 'export'; ?>">
+                        <?php echo $pending > 0 ? esc_html__( 'Cache Data', 'bookly-exports' ) : esc_html__( 'Export CSV', 'bookly-exports' ); ?>
                     </button>
                 </p>
 

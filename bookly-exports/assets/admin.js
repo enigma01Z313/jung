@@ -75,6 +75,22 @@
         countsEl.textContent = '';
     }
 
+    // The button only ever offers one step: caching while anything is still
+    // waiting, exporting once the queue is empty.
+    function setMode( mode ) {
+        runBtn.dataset.mode = mode;
+        runBtn.textContent = 'cache' === mode ? cfg.i18n.cacheData : cfg.i18n.exportCsv;
+    }
+
+    function refreshMode() {
+        return post( 'bookly_exports_status', {} ).then( function ( status ) {
+            cachedEl.textContent = num( status.cached );
+            pendEl.textContent = num( status.pending );
+            setMode( status.pending > 0 ? 'cache' : 'export' );
+            return status;
+        } );
+    }
+
     /**
      * Phase 1 — cache every approved appointment that is not in the table yet,
      * BooklyExports.cacheBatch rows per request.
@@ -139,21 +155,29 @@
     }
 
     runBtn.addEventListener( 'click', function () {
+        var caching = 'cache' === runBtn.dataset.mode;
+
         runBtn.disabled = true;
         reset();
 
-        cacheAll()
-            .then( buildCsv )
-            .then( function ( result ) {
+        var run = caching
+            ? cacheAll().then( function () {
+                showDone( cfg.i18n.cached );
+            } )
+            : buildCsv().then( function ( result ) {
                 setPhase( cfg.i18n.ready );
                 showDone( cfg.i18n.ready );
                 if ( result && result.downloadUrl ) {
                     window.location.href = result.downloadUrl;
                 }
-            } )
-            .catch( function ( err ) {
+            } );
+
+        run.catch( function ( err ) {
                 showError( err && err.message );
             } )
+            // Whatever just ran, the counts decide what the button offers next.
+            .then( refreshMode )
+            .catch( function () {} )
             .then( function () {
                 runBtn.disabled = false;
             } );
