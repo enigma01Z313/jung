@@ -1,0 +1,19 @@
+# Third-party Bookly plugins live here for reference only — they are not ours to
+# version. Listed one by one rather than as `bookly-*`, which would also swallow
+# our own bookly-exports plugin.
+/bookly-addon-advanced-google-calendar/
+/bookly-addon-cart/
+/bookly-addon-coupons/
+/bookly-addon-customer-cabinet/
+/bookly-addon-discounts/
+/bookly-addon-group-booking/
+/bookly-addon-packages/
+/bookly-addon-paypal-checkout/
+/bookly-addon-paypal-payments-standard/
+/bookly-addon-pro/
+/bookly-addon-special-days/
+/bookly-addon-staff-cabinet/
+/bookly-addon-stripe/
+/bookly-maintenance/
+/bookly-meetings-upload/
+/bookly-responsive-appointment-booking-tool/
