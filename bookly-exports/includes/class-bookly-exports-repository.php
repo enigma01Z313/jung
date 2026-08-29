@@ -199,7 +199,15 @@ class Bookly_Exports_Repository {
         return false === $affected ? 0 : (int) $affected;
     }
 
-    /** One page of cached rows, for the CSV writer. */
+    /**
+     * One page of cached rows, for the CSV writer: newest appointment first.
+     *
+     * The id breaks ties so the ordering is total — without it, rows sharing an
+     * appointmentDate could come back in a different order for two different
+     * OFFSETs, and the paged write would duplicate some rows while dropping
+     * others. Nothing is cached while the CSV is being written, so the set
+     * itself stays stable across the batches.
+     */
     public static function fetch_cached( $offset, $limit ) {
         global $wpdb;
 
@@ -208,7 +216,7 @@ class Bookly_Exports_Repository {
 
         return $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT `{$columns}` FROM {$table} ORDER BY id ASC LIMIT %d OFFSET %d",
+                "SELECT `{$columns}` FROM {$table} ORDER BY appointmentDate DESC, id DESC LIMIT %d OFFSET %d",
                 $limit,
                 $offset
             ),
