@@ -4,7 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Admin menu and the single «Approved Appointments» screen.
+ * Admin menu and the single «Completed Sessions» screen.
  */
 class Bookly_Exports_Admin {
 
@@ -28,8 +28,8 @@ class Bookly_Exports_Admin {
         // Without this the first child repeats the top-level label.
         add_submenu_page(
             self::PAGE_SLUG,
-            __( 'Approved Appointments', 'bookly-exports' ),
-            __( 'Approved Appointments', 'bookly-exports' ),
+            __( 'Completed Sessions', 'bookly-exports' ),
+            __( 'Completed Sessions', 'bookly-exports' ),
             self::CAPABILITY,
             self::PAGE_SLUG,
             array( __CLASS__, 'render_page' )
@@ -39,8 +39,8 @@ class Bookly_Exports_Admin {
         // slug under a second parent adds a link, not a second page.
         add_submenu_page(
             self::FINANCES_PARENT,
-            __( 'Approved Appointments', 'bookly-exports' ),
-            __( 'Approved Appointments', 'bookly-exports' ),
+            __( 'Completed Sessions', 'bookly-exports' ),
+            __( 'Completed Sessions', 'bookly-exports' ),
             self::CAPABILITY,
             self::PAGE_SLUG,
             array( __CLASS__, 'render_page' )
@@ -78,16 +78,16 @@ class Bookly_Exports_Admin {
                 'cacheBatch' => BOOKLY_EXPORTS_CACHE_BATCH,
                 'csvBatch'   => BOOKLY_EXPORTS_CSV_BATCH,
                 'i18n'       => array(
-                    'caching'     => __( 'Caching approved appointments…', 'bookly-exports' ),
-                    'cached'      => __( 'All approved appointments are cached.', 'bookly-exports' ),
-                    'nothingNew'  => __( 'Nothing new to cache — every approved appointment is already in the table.', 'bookly-exports' ),
-                    'building'    => __( 'Building the CSV file…', 'bookly-exports' ),
-                    'ready'       => __( 'The file is ready — your download should start automatically.', 'bookly-exports' ),
-                    'empty'       => __( 'There is nothing to export yet.', 'bookly-exports' ),
-                    'failed'      => __( 'Something went wrong. Please try again.', 'bookly-exports' ),
-                    'ofRecords'   => __( '%1$s of %2$s records', 'bookly-exports' ),
-                    'cacheData'   => __( 'Cache Data', 'bookly-exports' ),
-                    'exportCsv'   => __( 'Export CSV', 'bookly-exports' ),
+                    'caching'    => __( 'Caching newly completed sessions…', 'bookly-exports' ),
+                    'cached'     => __( 'Every completed session is cached.', 'bookly-exports' ),
+                    'nothingNew' => __( 'Nothing new to cache — every completed session is already in the table.', 'bookly-exports' ),
+                    'building'   => __( 'Building the CSV file…', 'bookly-exports' ),
+                    'ready'      => __( 'The file is ready — your download should start automatically.', 'bookly-exports' ),
+                    'empty'      => __( 'There is nothing to export yet.', 'bookly-exports' ),
+                    'failed'     => __( 'Something went wrong. Please try again.', 'bookly-exports' ),
+                    'ofRecords'  => __( '%1$s of %2$s records', 'bookly-exports' ),
+                    'lastExport' => __( 'Last export: %1$s (%2$s records)', 'bookly-exports' ),
+                    'download'   => __( 'Download CSV', 'bookly-exports' ),
                 ),
             )
         );
@@ -101,9 +101,10 @@ class Bookly_Exports_Admin {
         $bookly_ready = Bookly_Exports_Repository::bookly_installed();
         $cached       = $bookly_ready ? Bookly_Exports_Repository::cached_count() : 0;
         $pending      = $bookly_ready ? Bookly_Exports_Repository::pending_count() : 0;
+        $last         = $bookly_ready ? Bookly_Exports_Ajax::last_export() : null;
         ?>
         <div class="wrap bookly-exports">
-            <h1><?php esc_html_e( 'Approved Appointments', 'bookly-exports' ); ?></h1>
+            <h1><?php esc_html_e( 'Completed Sessions', 'bookly-exports' ); ?></h1>
 
             <?php if ( ! $bookly_ready ) : ?>
                 <div class="notice notice-error">
@@ -112,24 +113,24 @@ class Bookly_Exports_Admin {
             <?php else : ?>
 
                 <p class="bookly-exports__lead">
-                    <?php esc_html_e( 'Approved appointments are cached into a flat table first, then written out as CSV. Both steps run in batches, so a long history never trips the request timeout.', 'bookly-exports' ); ?>
+                    <?php esc_html_e( 'Only sessions whose date has already passed are reported, whatever therapist they belong to — archived ones included. Pressing Export CSV caches the sessions completed since the last run and then writes the whole table out, both in batches so a long history never trips the request timeout.', 'bookly-exports' ); ?>
                 </p>
 
                 <div class="bookly-exports__stats">
                     <div class="bookly-exports__stat">
-                        <span class="bookly-exports__stat-label"><?php esc_html_e( 'Cached records', 'bookly-exports' ); ?></span>
+                        <span class="bookly-exports__stat-label"><?php esc_html_e( 'Cached sessions', 'bookly-exports' ); ?></span>
                         <span class="bookly-exports__stat-value" id="bookly-exports-cached"><?php echo esc_html( number_format_i18n( $cached ) ); ?></span>
                     </div>
                     <div class="bookly-exports__stat">
-                        <span class="bookly-exports__stat-label"><?php esc_html_e( 'Waiting to be cached', 'bookly-exports' ); ?></span>
+                        <span class="bookly-exports__stat-label"><?php esc_html_e( 'Completed since the last run', 'bookly-exports' ); ?></span>
                         <span class="bookly-exports__stat-value" id="bookly-exports-pending"><?php echo esc_html( number_format_i18n( $pending ) ); ?></span>
                     </div>
                 </div>
 
                 <p>
-                    <?php // Anything left to cache has to be cached first, so the button offers that step until the queue is empty. ?>
-                    <button type="button" class="button button-primary button-hero" id="bookly-exports-run" data-mode="<?php echo $pending > 0 ? 'cache' : 'export'; ?>">
-                        <?php echo $pending > 0 ? esc_html__( 'Cache Data', 'bookly-exports' ) : esc_html__( 'Export CSV', 'bookly-exports' ); ?>
+                    <?php // One button: caching whatever is newly completed is part of exporting, not a separate step to remember. ?>
+                    <button type="button" class="button button-primary button-hero" id="bookly-exports-run">
+                        <?php esc_html_e( 'Export CSV', 'bookly-exports' ); ?>
                     </button>
                 </p>
 
@@ -140,6 +141,25 @@ class Bookly_Exports_Admin {
                     </div>
                     <div class="bookly-exports__counts" id="bookly-exports-counts"></div>
                 </div>
+
+                <?php // The last file stays in uploads, so it can be fetched again without rebuilding anything. ?>
+                <p class="bookly-exports__last" id="bookly-exports-last"<?php echo $last ? '' : ' hidden'; ?>>
+                    <span class="bookly-exports__last-label" id="bookly-exports-last-label">
+                        <?php
+                        if ( $last ) {
+                            printf(
+                                /* translators: 1: date and time of the export, 2: number of records in it */
+                                esc_html__( 'Last export: %1$s (%2$s records)', 'bookly-exports' ),
+                                esc_html( $last['generatedAt'] ),
+                                esc_html( number_format_i18n( $last['rows'] ) )
+                            );
+                        }
+                        ?>
+                    </span>
+                    <a class="button" id="bookly-exports-last-link" href="<?php echo $last ? esc_url( $last['url'] ) : '#'; ?>">
+                        <?php esc_html_e( 'Download CSV', 'bookly-exports' ); ?>
+                    </a>
+                </p>
 
                 <div class="notice notice-success" id="bookly-exports-done" hidden><p></p></div>
                 <div class="notice notice-error" id="bookly-exports-error" hidden><p></p></div>

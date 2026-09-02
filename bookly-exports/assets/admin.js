@@ -7,15 +7,18 @@
         return;
     }
 
-    var runBtn   = document.getElementById( 'bookly-exports-run' );
-    var progress = document.getElementById( 'bookly-exports-progress' );
-    var phaseEl  = document.getElementById( 'bookly-exports-phase' );
-    var barEl    = document.getElementById( 'bookly-exports-bar' );
-    var countsEl = document.getElementById( 'bookly-exports-counts' );
-    var doneEl   = document.getElementById( 'bookly-exports-done' );
-    var errorEl  = document.getElementById( 'bookly-exports-error' );
-    var cachedEl = document.getElementById( 'bookly-exports-cached' );
-    var pendEl   = document.getElementById( 'bookly-exports-pending' );
+    var runBtn    = document.getElementById( 'bookly-exports-run' );
+    var progress  = document.getElementById( 'bookly-exports-progress' );
+    var phaseEl   = document.getElementById( 'bookly-exports-phase' );
+    var barEl     = document.getElementById( 'bookly-exports-bar' );
+    var countsEl  = document.getElementById( 'bookly-exports-counts' );
+    var doneEl    = document.getElementById( 'bookly-exports-done' );
+    var errorEl   = document.getElementById( 'bookly-exports-error' );
+    var cachedEl  = document.getElementById( 'bookly-exports-cached' );
+    var pendEl    = document.getElementById( 'bookly-exports-pending' );
+    var lastEl    = document.getElementById( 'bookly-exports-last' );
+    var lastLabel = document.getElementById( 'bookly-exports-last-label' );
+    var lastLink  = document.getElementById( 'bookly-exports-last-link' );
 
     if ( ! runBtn ) {
         return;
@@ -75,32 +78,35 @@
         countsEl.textContent = '';
     }
 
-    // The button only ever offers one step: caching while anything is still
-    // waiting, exporting once the queue is empty.
-    function setMode( mode ) {
-        runBtn.dataset.mode = mode;
-        runBtn.textContent = 'cache' === mode ? cfg.i18n.cacheData : cfg.i18n.exportCsv;
+    // The finished file is kept, so the link stays usable long after the run —
+    // this only moves it on to whatever the latest run produced.
+    function setLastExport( last ) {
+        if ( ! last || ! last.url ) {
+            return;
+        }
+
+        lastLabel.textContent = cfg.i18n.lastExport
+            .replace( '%1$s', last.generatedAt )
+            .replace( '%2$s', num( last.rows ) );
+        lastLink.href = last.url;
+        lastEl.hidden = false;
     }
 
-    function refreshMode() {
+    function refreshCounts() {
         return post( 'bookly_exports_status', {} ).then( function ( status ) {
             cachedEl.textContent = num( status.cached );
             pendEl.textContent = num( status.pending );
-            setMode( status.pending > 0 ? 'cache' : 'export' );
             return status;
         } );
     }
 
     /**
-     * Phase 1 — cache every approved appointment that is not in the table yet,
+     * Phase 1 — cache every completed session that is not in the table yet,
      * BooklyExports.cacheBatch rows per request.
      */
     function cacheAll() {
-        return post( 'bookly_exports_status', {} ).then( function ( status ) {
+        return refreshCounts().then( function ( status ) {
             var total = status.pending;
-
-            cachedEl.textContent = num( status.cached );
-            pendEl.textContent = num( status.pending );
 
             if ( total === 0 ) {
                 setPhase( cfg.i18n.nothingNew );
@@ -139,7 +145,7 @@
             setProgress( 0, start.total );
 
             function step( offset ) {
-                return post( 'bookly_exports_csv_batch', { token: start.token, offset: offset } )
+                return post( 'bookly_exports_csv_batch', { stamp: start.stamp, offset: offset } )
                     .then( function ( data ) {
                         setProgress( data.offset, data.total );
 
@@ -154,29 +160,31 @@
         } );
     }
 
+    // One press does both phases: catch the table up on what has completed since
+    // last time, then export all of it.
     runBtn.addEventListener( 'click', function () {
-        var caching = 'cache' === runBtn.dataset.mode;
-
         runBtn.disabled = true;
         reset();
 
-        var run = caching
-            ? cacheAll().then( function () {
-                showDone( cfg.i18n.cached );
-            } )
-            : buildCsv().then( function ( result ) {
+        cacheAll()
+            .then( buildCsv )
+            .then( function ( result ) {
                 setPhase( cfg.i18n.ready );
                 showDone( cfg.i18n.ready );
-                if ( result && result.downloadUrl ) {
-                    window.location.href = result.downloadUrl;
-                }
-            } );
 
-        run.catch( function ( err ) {
+                var last = result && result.last;
+                setLastExport( last );
+
+                if ( last && last.url ) {
+                    // Content-Disposition: attachment, so this downloads rather
+                    // than navigating away from the page.
+                    window.location.href = last.url;
+                }
+            } )
+            .catch( function ( err ) {
                 showError( err && err.message );
             } )
-            // Whatever just ran, the counts decide what the button offers next.
-            .then( refreshMode )
+            .then( refreshCounts )
             .catch( function () {} )
             .then( function () {
                 runBtn.disabled = false;

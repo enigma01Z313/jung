@@ -9,11 +9,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Caching and CSV writing are both driven from the browser one slice at a time:
  * each request does a bounded amount of work and reports where it got to, so the
  * progress bar is real rather than a guess and no single request has to survive
- * the whole history.
+ * the whole history. One button runs both phases back to back.
  */
 class Bookly_Exports_Ajax {
 
     const NONCE = 'bookly_exports';
+
+    /** Where the finished file's name and stamp are remembered between runs. */
+    const LAST_FILE_OPTION = 'bookly_exports_last_file';
 
     public static function register() {
         add_action( 'wp_ajax_bookly_exports_status', array( __CLASS__, 'status' ) );
@@ -41,6 +44,10 @@ class Bookly_Exports_Ajax {
     public static function status() {
         self::guard();
 
+        // The run starts here, so this is the moment to drop anything the table
+        // is holding that is no longer a completed session.
+        Bookly_Exports_Repository::purge_uncompleted();
+
         wp_send_json_success(
             array(
                 'cached'  => Bookly_Exports_Repository::cached_count(),
@@ -49,7 +56,7 @@ class Bookly_Exports_Ajax {
         );
     }
 
-    /** Cache the next BOOKLY_EXPORTS_CACHE_BATCH approved appointments. */
+    /** Cache the next BOOKLY_EXPORTS_CACHE_BATCH completed sessions. */
     public static function cache_batch() {
         self::guard();
 
@@ -76,9 +83,15 @@ class Bookly_Exports_Ajax {
         );
     }
 
-    // --- CSV ----------------------------------------------------------------
+    // --- The export folder ---------------------------------------------------
 
-    /** uploads/bookly-exports, created and closed to direct browsing. */
+    /**
+     * uploads/bookly-exports, created and closed to direct browsing.
+     *
+     * The finished file stays here between runs — that is the whole point of the
+     * folder — so it is served through the download endpoint, which checks the
+     * capability and the nonce, rather than by its own URL.
+     */
     private static function export_dir() {
         $uploads = wp_upload_dir();
         $dir     = trailingslashit( $uploads['basedir'] ) . 'bookly-exports';
@@ -98,16 +111,58 @@ class Bookly_Exports_Ajax {
         return $dir;
     }
 
-    /** Tokens come from the browser, so never let one walk out of the folder. */
-    private static function file_for_token( $token ) {
-        $token = preg_replace( '/[^a-f0-9]/', '', (string) $token );
+    /**
+     * The name a run writes under: the moment the export was taken, on the same
+     * Tehran clock the dates inside the file use.
+     */
+    private static function file_name_for( $stamp ) {
+        return 'bookly-completed-sessions-' . $stamp . '.csv';
+    }
 
-        if ( 32 !== strlen( $token ) ) {
+    /**
+     * Stamps come back from the browser between batches, so a stamp that isn't
+     * exactly the shape this plugin writes is refused rather than sanitised —
+     * nothing that isn't digits and separators can reach the filesystem.
+     */
+    private static function valid_stamp( $stamp ) {
+        return (bool) preg_match( '/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/', (string) $stamp );
+    }
+
+    /** The half-written file a run appends to before it is published. */
+    private static function part_file( $stamp ) {
+        if ( ! self::valid_stamp( $stamp ) ) {
             return null;
         }
 
-        return self::export_dir() . '/bookly-approved-appointments-' . $token . '.csv';
+        return self::export_dir() . '/' . self::file_name_for( $stamp ) . '.part';
     }
+
+    /**
+     * The last finished export, or null. Also the guard against the option
+     * outliving the file it names (a manually emptied uploads folder, a restore).
+     */
+    public static function last_export() {
+        $last = get_option( self::LAST_FILE_OPTION );
+
+        if ( ! is_array( $last ) || empty( $last['file'] ) ) {
+            return null;
+        }
+
+        $path = self::export_dir() . '/' . basename( $last['file'] );
+
+        if ( ! file_exists( $path ) ) {
+            return null;
+        }
+
+        return array(
+            'file'        => basename( $last['file'] ),
+            'generatedAt' => isset( $last['generated_at'] ) ? $last['generated_at'] : '',
+            'rows'        => isset( $last['rows'] ) ? (int) $last['rows'] : 0,
+            'url'         => self::download_url(),
+        );
+    }
+
+    // --- CSV -----------------------------------------------------------------
 
     /**
      * Open a fresh file and write the heading row.
@@ -124,10 +179,19 @@ class Bookly_Exports_Ajax {
             wp_send_json_error( array( 'message' => __( 'There is nothing to export yet.', 'bookly-exports' ) ), 400 );
         }
 
-        $token = md5( uniqid( 'bookly-exports', true ) );
-        $file  = self::file_for_token( $token );
+        $dir = self::export_dir();
 
-        $handle = fopen( $file, 'w' );
+        // Only half-written files go now; the previous finished export is kept
+        // until this one is complete, so a run that dies partway through doesn't
+        // take the last good download with it.
+        foreach ( (array) glob( $dir . '/*.part' ) as $stale ) {
+            @unlink( $stale );
+        }
+
+        $stamp = str_replace( ' ', '_', str_replace( ':', '-', Bookly_Exports_Repository::now_in_export_timezone() ) );
+        $file  = self::part_file( $stamp );
+
+        $handle = $file ? fopen( $file, 'w' ) : false;
         if ( false === $handle ) {
             wp_send_json_error( array( 'message' => __( 'The export file could not be created.', 'bookly-exports' ) ), 500 );
         }
@@ -138,7 +202,7 @@ class Bookly_Exports_Ajax {
 
         wp_send_json_success(
             array(
-                'token'  => $token,
+                'stamp'  => $stamp,
                 'total'  => $total,
                 'offset' => 0,
             )
@@ -149,9 +213,9 @@ class Bookly_Exports_Ajax {
     public static function csv_batch() {
         self::guard();
 
-        $token  = isset( $_POST['token'] ) ? sanitize_text_field( wp_unslash( $_POST['token'] ) ) : '';
+        $stamp  = isset( $_POST['stamp'] ) ? sanitize_text_field( wp_unslash( $_POST['stamp'] ) ) : '';
         $offset = isset( $_POST['offset'] ) ? max( 0, (int) $_POST['offset'] ) : 0;
-        $file   = self::file_for_token( $token );
+        $file   = self::part_file( $stamp );
 
         if ( ! $file || ! file_exists( $file ) ) {
             wp_send_json_error( array( 'message' => __( 'The export file is no longer available. Please start again.', 'bookly-exports' ) ), 400 );
@@ -178,21 +242,63 @@ class Bookly_Exports_Ajax {
         $total   = Bookly_Exports_Repository::cached_count();
         $done    = count( $rows ) < BOOKLY_EXPORTS_CSV_BATCH || $written >= $total;
 
-        wp_send_json_success(
-            array(
-                'offset'      => $written,
-                'total'       => $total,
-                'done'        => $done,
-                'downloadUrl' => $done ? self::download_url( $token ) : null,
-            )
+        $response = array(
+            'offset' => $written,
+            'total'  => $total,
+            'done'   => $done,
         );
+
+        if ( $done ) {
+            $response['last'] = self::publish( $stamp, $written );
+        }
+
+        wp_send_json_success( $response );
     }
 
-    private static function download_url( $token ) {
+    /**
+     * Turn the finished .part into *the* export: it takes the run's name, the
+     * previous one is removed, and the option remembers it so the screen can
+     * offer the download again later without rebuilding anything.
+     *
+     * @return array the same shape last_export() returns
+     */
+    private static function publish( $stamp, $rows ) {
+        $dir   = self::export_dir();
+        $name  = self::file_name_for( $stamp );
+        $part  = self::part_file( $stamp );
+        $final = $dir . '/' . $name;
+
+        if ( ! @rename( $part, $final ) ) {
+            // Stop before the old file is cleared away — an export that cannot
+            // be published must not cost the one that is already there.
+            wp_send_json_error( array( 'message' => __( 'The export file could not be finished.', 'bookly-exports' ) ), 500 );
+        }
+
+        foreach ( (array) glob( $dir . '/*.csv' ) as $old ) {
+            if ( basename( $old ) !== $name ) {
+                @unlink( $old );
+            }
+        }
+
+        update_option(
+            self::LAST_FILE_OPTION,
+            array(
+                'file'         => $name,
+                // Stored formatted rather than as a timestamp: it is only ever
+                // shown, and it is already on the file's own Tehran clock.
+                'generated_at' => substr( $stamp, 0, 10 ) . ' ' . str_replace( '-', ':', substr( $stamp, 11 ) ),
+                'rows'         => (int) $rows,
+            ),
+            false
+        );
+
+        return self::last_export();
+    }
+
+    private static function download_url() {
         return add_query_arg(
             array(
                 'action' => 'bookly_exports_download',
-                'token'  => $token,
                 'nonce'  => wp_create_nonce( self::NONCE ),
             ),
             admin_url( 'admin-ajax.php' )
@@ -200,8 +306,9 @@ class Bookly_Exports_Ajax {
     }
 
     /**
-     * Stream the finished file, then delete it — the cache table is the record
-     * that matters, so a stale CSV left in uploads is only a liability.
+     * Stream the last finished file — and keep it. Re-downloading yesterday's
+     * export shouldn't mean caching and rebuilding the whole history again, so
+     * the file lives in uploads until the next export replaces it.
      */
     public static function download() {
         if ( ! current_user_can( Bookly_Exports_Admin::CAPABILITY ) ) {
@@ -210,22 +317,20 @@ class Bookly_Exports_Ajax {
 
         check_admin_referer( self::NONCE, 'nonce' );
 
-        $token = isset( $_GET['token'] ) ? sanitize_text_field( wp_unslash( $_GET['token'] ) ) : '';
-        $file  = self::file_for_token( $token );
+        $last = self::last_export();
 
-        if ( ! $file || ! file_exists( $file ) ) {
-            wp_die( esc_html__( 'The export file is no longer available.', 'bookly-exports' ), '', array( 'response' => 404 ) );
+        if ( ! $last ) {
+            wp_die( esc_html__( 'There is no export file yet. Run an export first.', 'bookly-exports' ), '', array( 'response' => 404 ) );
         }
 
-        $name = 'bookly-approved-appointments-' . gmdate( 'Ymd-His' ) . '.csv';
+        $file = self::export_dir() . '/' . $last['file'];
 
         nocache_headers();
         header( 'Content-Type: text/csv; charset=utf-8' );
-        header( 'Content-Disposition: attachment; filename="' . $name . '"' );
+        header( 'Content-Disposition: attachment; filename="' . $last['file'] . '"' );
         header( 'Content-Length: ' . filesize( $file ) );
 
         readfile( $file );
-        @unlink( $file );
 
         exit;
     }
