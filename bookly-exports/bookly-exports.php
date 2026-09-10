@@ -23,7 +23,7 @@ define( 'BOOKLY_EXPORTS_TIMEZONE', 'Asia/Tehran' );
 define( 'BOOKLY_EXPORTS_CACHE_BATCH', 100 );
 
 /** Rows written to the CSV per AJAX round-trip. */
-define( 'BOOKLY_EXPORTS_CSV_BATCH', 1000 );
+define( 'BOOKLY_EXPORTS_CSV_BATCH', 10000 );
 
 require_once BOOKLY_EXPORTS_PATH . 'includes/class-bookly-exports-installer.php';
 require_once BOOKLY_EXPORTS_PATH . 'includes/class-bookly-exports-repository.php';

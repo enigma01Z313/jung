@@ -26,13 +26,13 @@ statement per returned row.
 ```sql
 -- (a) $total = $query->count();     <- runs BEFORE any WHERE is applied
 SELECT COUNT(*)
-  FROM wp_bookly_appointments a
-  LEFT JOIN wp_bookly_customer_appointments ca ON a.id = ca.appointment_id
-  LEFT JOIN wp_bookly_services              s  ON s.id = a.service_id
-  LEFT JOIN wp_bookly_customers             c  ON c.id = ca.customer_id
-  LEFT JOIN wp_bookly_payments              p  ON p.id = ca.payment_id
-  LEFT JOIN wp_bookly_staff                 st ON st.id = a.staff_id
-  LEFT JOIN wp_bookly_staff_services        ss ON ss.staff_id = st.id
+  FROM r3fy6ztjv_bookly_appointments a
+  LEFT JOIN r3fy6ztjv_bookly_customer_appointments ca ON a.id = ca.appointment_id
+  LEFT JOIN r3fy6ztjv_bookly_services              s  ON s.id = a.service_id
+  LEFT JOIN r3fy6ztjv_bookly_customers             c  ON c.id = ca.customer_id
+  LEFT JOIN r3fy6ztjv_bookly_payments              p  ON p.id = ca.payment_id
+  LEFT JOIN r3fy6ztjv_bookly_staff                 st ON st.id = a.staff_id
+  LEFT JOIN r3fy6ztjv_bookly_staff_services        ss ON ss.staff_id = st.id
                                               AND ss.service_id = s.id
                                               AND ss.location_id = a.location_id;
 
@@ -73,7 +73,7 @@ clock:
 Derived from `lib/Installer.php` plus InnoDB's rule that every foreign key gets
 an index automatically.
 
-### `wp_bookly_appointments`
+### `r3fy6ztjv_bookly_appointments`
 
 | Index | Source |
 |---|---|
@@ -86,7 +86,7 @@ column the export filters on in every configuration and usually sorts by — and
 it has no index at all. `location_id` has no FK in core (Locations is an
 add-on), so it gets no index either.
 
-### `wp_bookly_customer_appointments`
+### `r3fy6ztjv_bookly_customer_appointments`
 
 | Index | Source |
 |---|---|
@@ -99,10 +99,10 @@ filters on.
 
 ### The rest
 
-- `wp_bookly_customers`, `wp_bookly_services`, `wp_bookly_staff`,
-  `wp_bookly_payments` are all joined on their **primary key** — already
+- `r3fy6ztjv_bookly_customers`, `r3fy6ztjv_bookly_services`, `r3fy6ztjv_bookly_staff`,
+  `r3fy6ztjv_bookly_payments` are all joined on their **primary key** — already
   optimal, nothing to add.
-- `wp_bookly_staff_services` has `UNIQUE (staff_id, service_id, location_id)`,
+- `r3fy6ztjv_bookly_staff_services` has `UNIQUE (staff_id, service_id, location_id)`,
   which exactly covers the `ss` join condition. Also optimal.
   (Side note: nothing from `ss` is selected in the core query — it is a dead
   join here — but it costs one index lookup per row, not a scan.)
@@ -113,27 +113,27 @@ So the entire index problem is concentrated in two tables.
 
 ## 3) The indexes worth adding
 
-Replace `wp_` with the site's actual `$wpdb->prefix`.
+Replace `r3fy6ztjv_` with the site's actual `$wpdb->prefix`.
 
 ```sql
 -- The big one: the date-range filter AND the default sort.
-ALTER TABLE wp_bookly_appointments
+ALTER TABLE r3fy6ztjv_bookly_appointments
   ADD INDEX idx_bkly_appt_start_date (start_date);
 
 -- Filter-by-staff / filter-by-service combined with a date range.
 -- Leftmost prefix still satisfies the FK, so these supersede the auto indexes.
-ALTER TABLE wp_bookly_appointments
+ALTER TABLE r3fy6ztjv_bookly_appointments
   ADD INDEX idx_bkly_appt_staff_start   (staff_id,   start_date),
   ADD INDEX idx_bkly_appt_service_start (service_id, start_date);
 
 -- Only if the Locations add-on is in use and exports are filtered by location.
-ALTER TABLE wp_bookly_appointments
+ALTER TABLE r3fy6ztjv_bookly_appointments
   ADD INDEX idx_bkly_appt_location (location_id);
 
 -- Helps the status filter and lets the ca side of the join be filtered on index.
 -- status is VARCHAR(255); a prefix keeps the index small — no real status is
 -- longer than ~20 chars, including Bookly Pro's custom ones.
-ALTER TABLE wp_bookly_customer_appointments
+ALTER TABLE r3fy6ztjv_bookly_customer_appointments
   ADD INDEX idx_bkly_ca_status_appt (status(20), appointment_id);
 ```
 
@@ -165,7 +165,7 @@ Notes:
 Afterwards:
 
 ```sql
-ANALYZE TABLE wp_bookly_appointments, wp_bookly_customer_appointments;
+ANALYZE TABLE r3fy6ztjv_bookly_appointments, r3fy6ztjv_bookly_customer_appointments;
 ```
 
 ---
@@ -247,13 +247,13 @@ that makes them go away.
 
 ```sql
 -- Before/after inventory
-SHOW INDEX FROM wp_bookly_appointments;
-SHOW INDEX FROM wp_bookly_customer_appointments;
+SHOW INDEX FROM r3fy6ztjv_bookly_appointments;
+SHOW INDEX FROM r3fy6ztjv_bookly_customer_appointments;
 
 -- Plan for the export's fetch query (paste the real one from the slow log)
 EXPLAIN SELECT a.id, ca.id, a.start_date
-  FROM wp_bookly_appointments a
-  LEFT JOIN wp_bookly_customer_appointments ca ON a.id = ca.appointment_id
+  FROM r3fy6ztjv_bookly_appointments a
+  LEFT JOIN r3fy6ztjv_bookly_customer_appointments ca ON a.id = ca.appointment_id
  WHERE a.start_date BETWEEN '2025-01-01 00:00:00' AND '2025-12-31 23:59:59'
  ORDER BY a.start_date DESC, a.id DESC;
 ```
@@ -294,7 +294,7 @@ per-row query and the unbounded result set stay linear in the number of rows no
 matter how good the plan is.
 
 That gap is precisely what our **`bookly-exports`** plugin already routes
-around: a flat `wp_bookly_appointments_cached` table (`UNIQUE (caId)`,
+around: a flat `r3fy6ztjv_bookly_appointments_cached` table (`UNIQUE (caId)`,
 `KEY (appointmentDate)`), populated incrementally in 100-row batches and read
 back in 1000-row batches, so the CSV never depends on the 6-way join or on a
 single unbounded request. At our data volume that remains the right path; the

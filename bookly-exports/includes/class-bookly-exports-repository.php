@@ -321,4 +321,38 @@ class Bookly_Exports_Repository {
             ARRAY_A
         );
     }
+
+    public static function fetch_future() {
+        global $wpdb;
+        $p         = $wpdb->prefix;
+
+        return $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT ca.id AS caId,
+                        ca.created_at AS created,
+                        a.start_date AS appointmentDate,
+                        a.end_date AS endDate,
+                        st.full_name AS therapist,
+                        c.full_name AS customerName,
+                        c.first_name AS customerFirstName,
+                        c.last_name AS customerLastName,
+                        c.phone AS customerPhone,
+                        c.email AS customerEmail,
+                        a.custom_service_name AS customServiceName,
+                        s.title AS serviceTitle,
+                        s.duration AS duration,
+                        IFNULL(a.custom_service_name, s.title) AS services
+                   FROM {$p}bookly_customer_appointments ca
+                   INNER JOIN {$p}bookly_appointments a ON a.id = ca.appointment_id
+                   LEFT JOIN {$p}bookly_staff st ON st.id = a.staff_id
+                   LEFT JOIN {$p}bookly_customers c ON c.id = ca.customer_id
+                   LEFT JOIN {$p}bookly_services s ON s.id = a.service_id
+                  WHERE start_date >= %s
+                  AND ca.status NOT IN ('cancelled', 'rejected', 'waitlisted')
+                  ORDER BY a.start_date DESC",
+                self::now_in_export_timezone()
+            ),
+            ARRAY_A
+        );
+    }
 }

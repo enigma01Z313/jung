@@ -223,6 +223,21 @@ class Bookly_Exports_Ajax {
 
         $rows = Bookly_Exports_Repository::fetch_cached( $offset, BOOKLY_EXPORTS_CSV_BATCH );
 
+        if($offset == 0){
+            $future_rows = Bookly_Exports_Repository::fetch_future();
+
+            $handle = fopen( $file, 'a' );
+            $columns = array_keys( Bookly_Exports_Repository::csv_columns() );
+            foreach ( $future_rows as $row ) {
+                $line = array();
+                foreach ( $columns as $column ) {
+                    $line[] = isset( $row[ $column ] ) ? $row[ $column ] : '';
+                }
+                fputcsv( $handle, $line );
+            }
+            fclose( $handle );
+        }
+
         $handle = fopen( $file, 'a' );
         if ( false === $handle ) {
             wp_send_json_error( array( 'message' => __( 'The export file could not be written to.', 'bookly-exports' ) ), 500 );
