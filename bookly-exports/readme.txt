@@ -3,7 +3,7 @@ Author: Farzin Ahamadi
 Requires at least: 5.6
 Tested up to: 6.6
 Requires PHP: 7.2
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 
 Caches Bookly's completed sessions into a flat table and exports them to CSV,
 both in progress-tracked batches. The last file produced is kept for
@@ -25,7 +25,8 @@ also linked from the Jung plugin's *Finances* menu. Both point at the same page.
 A session is cached once **its date has passed** and its status doesn't say it
 never happened — everything except `cancelled`, `rejected` and `waitlisted`
 (adjustable through the `bookly_exports_excluded_statuses` filter). Future
-bookings are not cached at all.
+bookings are not cached at all — they are read live when the file is written
+(see *Upcoming sessions*), because one can still be moved or called off.
 
 Earlier versions cached on `status = 'approved'` instead, which silently dropped
 whole therapists from the report: Bookly moves a past booking on to `done`, and a
@@ -35,8 +36,13 @@ end up with nothing left in the export at all. Taking every status but the ones
 that mean "didn't happen" fixes that, and keeps fixing it for any status added
 later.
 
-Staff visibility is never looked at, and the staff join is a LEFT JOIN, so an
-archived (or removed) therapist's past sessions still make it into the file.
+Staff visibility never excludes anyone, and the staff join is a LEFT JOIN, so an
+archived (or removed) therapist's past sessions still make it into the file. It
+is only used to *mark* them: an archived therapist's name is written with
+` (Archived)` after it, so the two can still be told apart in a report that
+deliberately keeps both. The marker is decided when the file is written, not
+when the session was cached, so a therapist archived today comes out marked
+against all of their earlier sessions too.
 
 == The table ==
 
@@ -46,8 +52,9 @@ still ends up with it) as `{prefix}bookly_appointments_cached`:
 | Column            | CSV heading      | Notes                                        |
 |-------------------|------------------|----------------------------------------------|
 | `caId`            | —                | Source `bookly_customer_appointments.id`; unique, and what makes "cache only what isn't cached" work |
+| `staffId`         | —                | Source `bookly_appointments.staff_id`, 0 when there is none; what lets the writer ask whether that therapist has since been archived |
 | `appointmentDate` | Appointment Date | Tehran time                                  |
-| `therapist`       | Therapist        | Staff full name                              |
+| `therapist`       | Therapist        | Staff full name, with ` (Archived)` appended when Bookly has archived them |
 | `customerName`    | Customer Name    | Full name, else first + last                 |
 | `customerPhone`   | Customer Phone   |                                              |
 | `created`         | Created          | Appointment creation, Tehran time            |
@@ -60,6 +67,24 @@ are converted to Asia/Tehran rather than relabelled.
 
 Upgrading to 1.1.0 purges anything the old rule left behind — future bookings and
 sessions since cancelled — once, from the installer.
+
+Upgrading to 1.2.0 adds `staffId` and fills it in for rows that are already
+cached, so no site has to re-cache its history to get the archived marker.
+
+== Upcoming sessions ==
+
+The file also carries the sessions that have **not happened yet** — same statuses,
+same columns — written at the top, ahead of the completed ones, so the file as a
+whole stays newest-first. They are read straight from Bookly on the first CSV
+batch rather than cached, and go through exactly the same conversions the cached
+half does: Tehran dates, the customer-name fallback, and a duration in
+**minutes**. (Handing Bookly's own columns to the writer instead is what made a
+45-minute booking come out as `2700` — `bookly_services.duration` is stored in
+seconds.)
+
+The cut-off is the site's own clock on both sides, so "already happened" and
+"still to come" are exact complements and no session can land in both halves of
+the file, or in neither.
 
 == How the export runs ==
 
@@ -100,6 +125,16 @@ it again after more sessions have passed caches just those, then exports
 everything.
 
 == Changelog ==
+
+= 1.2.0 =
+* Added: sessions that have not happened yet are part of the export, at the top
+  of the file, read live rather than cached.
+* Fixed: those upcoming rows carried their duration in seconds — a 45-minute
+  booking exported as `2700` — and their dates in the site's timezone rather
+  than Tehran, because they bypassed the conversions the cached rows go through.
+* Added: an archived therapist is exported as `Name (Archived)`, decided when
+  the file is written so it also covers sessions cached before they were
+  archived.
 
 = 1.1.0 =
 * Fixed: appointments belonging to archived therapists were missing from the

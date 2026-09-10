@@ -221,21 +221,16 @@ class Bookly_Exports_Ajax {
             wp_send_json_error( array( 'message' => __( 'The export file is no longer available. Please start again.', 'bookly-exports' ) ), 400 );
         }
 
-        $rows = Bookly_Exports_Repository::fetch_cached( $offset, BOOKLY_EXPORTS_CSV_BATCH );
+        $cached = Bookly_Exports_Repository::fetch_cached( $offset, BOOKLY_EXPORTS_CSV_BATCH );
+        $rows   = $cached;
 
-        if($offset == 0){
-            $future_rows = Bookly_Exports_Repository::fetch_future();
-
-            $handle = fopen( $file, 'a' );
-            $columns = array_keys( Bookly_Exports_Repository::csv_columns() );
-            foreach ( $future_rows as $row ) {
-                $line = array();
-                foreach ( $columns as $column ) {
-                    $line[] = isset( $row[ $column ] ) ? $row[ $column ] : '';
-                }
-                fputcsv( $handle, $line );
-            }
-            fclose( $handle );
+        // Sessions still ahead of us aren't cached, so they aren't paged over
+        // either: they go in once, on the first batch, ahead of the cached rows
+        // — which keeps the file as a whole in newest-first order.
+        if ( 0 === $offset ) {
+            $future = Bookly_Exports_Repository::fetch_future();
+            $rows   = array_merge( $future, $cached );
+            self::remember_future_count( $stamp, count( $future ) );
         }
 
         $handle = fopen( $file, 'a' );
@@ -253,9 +248,12 @@ class Bookly_Exports_Ajax {
         }
         fclose( $handle );
 
-        $written = $offset + count( $rows );
+        // The offset pages the cache and nothing else: the upcoming rows sit
+        // outside it, so counting them here would step over that many cached
+        // rows on the next request and drop them from the file.
+        $written = $offset + count( $cached );
         $total   = Bookly_Exports_Repository::cached_count();
-        $done    = count( $rows ) < BOOKLY_EXPORTS_CSV_BATCH || $written >= $total;
+        $done    = count( $cached ) < BOOKLY_EXPORTS_CSV_BATCH || $written >= $total;
 
         $response = array(
             'offset' => $written,
@@ -264,10 +262,35 @@ class Bookly_Exports_Ajax {
         );
 
         if ( $done ) {
-            $response['last'] = self::publish( $stamp, $written );
+            // The finished file's tally is every line in it, upcoming included.
+            $response['last'] = self::publish( $stamp, $written + self::forget_future_count( $stamp ) );
         }
 
         wp_send_json_success( $response );
+    }
+
+    /**
+     * How many upcoming rows a run put in, remembered between its batches.
+     *
+     * They are written on the first batch but only counted on the last one, and
+     * the two are separate requests — so the number has to outlive the first.
+     */
+    private static function future_count_key( $stamp ) {
+        return 'bookly_exports_future_' . md5( (string) $stamp );
+    }
+
+    private static function remember_future_count( $stamp, $count ) {
+        set_transient( self::future_count_key( $stamp ), (int) $count, HOUR_IN_SECONDS );
+    }
+
+    /** Read it back and drop it, so an abandoned run leaves nothing behind. */
+    private static function forget_future_count( $stamp ) {
+        $key   = self::future_count_key( $stamp );
+        $count = (int) get_transient( $key );
+
+        delete_transient( $key );
+
+        return $count;
     }
 
     /**

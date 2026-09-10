@@ -21,11 +21,20 @@ if ( ! defined( 'ABSPATH' ) ) {
  * happen" and taking everything else keeps that from recurring for a status
  * added later.
  *
- * Staff visibility is deliberately never looked at: an archived therapist's past
- * sessions were still delivered, and the staff join stays a LEFT JOIN so a
- * session survives into the report even when its therapist row has gone.
+ * Sessions still ahead of us are read straight from Bookly at export time
+ * (fetch_future) rather than cached: they are few, and a booking that has not
+ * happened yet can still be moved or called off, so a cached copy would go
+ * stale.
+ *
+ * Staff visibility is deliberately never used to *exclude* anyone: an archived
+ * therapist's past sessions were still delivered, and the staff join stays a
+ * LEFT JOIN so a session survives into the report even when its therapist row
+ * has gone. It is only used to mark the name — see ARCHIVED_SUFFIX.
  */
 class Bookly_Exports_Repository {
+
+    /** Appended to the therapist's name when Bookly has archived them. */
+    const ARCHIVED_SUFFIX = ' (Archived)';
 
     /** CSV headings, in order. The keys are the cache table's columns. */
     public static function csv_columns() {
@@ -61,6 +70,17 @@ class Bookly_Exports_Repository {
         return (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
     }
 
+    /** The excluded-status half of the two conditions below, or ''. */
+    private static function status_condition() {
+        $statuses = array_map( 'esc_sql', (array) self::excluded_statuses() );
+
+        if ( empty( $statuses ) ) {
+            return '';
+        }
+
+        return " AND ca.status NOT IN ('" . implode( "', '", $statuses ) . "')";
+    }
+
     /**
      * The «this session is completed» test, shared by every query below so the
      * counter and the reader can never disagree about what is in scope.
@@ -74,16 +94,22 @@ class Bookly_Exports_Repository {
      * and neither comes from a request.
      */
     private static function completed_condition() {
-        $now      = esc_sql( current_time( 'mysql' ) );
-        $statuses = array_map( 'esc_sql', (array) self::excluded_statuses() );
+        $now = esc_sql( current_time( 'mysql' ) );
 
-        $condition = "a.start_date IS NOT NULL AND a.start_date < '{$now}'";
+        return "a.start_date IS NOT NULL AND a.start_date < '{$now}'" . self::status_condition();
+    }
 
-        if ( ! empty( $statuses ) ) {
-            $condition .= " AND ca.status NOT IN ('" . implode( "', '", $statuses ) . "')";
-        }
+    /**
+     * The exact complement of completed_condition(): a session that has not
+     * happened yet and has not been called off. The same site clock, for the
+     * same reason — measuring against a Tehran "now" would slide the boundary
+     * by the offset between the two clocks and land the sessions in that gap
+     * in both halves of the export, or in neither.
+     */
+    private static function upcoming_condition() {
+        $now = esc_sql( current_time( 'mysql' ) );
 
-        return $condition;
+        return "a.start_date IS NOT NULL AND a.start_date >= '{$now}'" . self::status_condition();
     }
 
     /** Now, on the clock the cache table's dates are written in. */
@@ -119,6 +145,45 @@ class Bookly_Exports_Repository {
     }
 
     /**
+     * The joined shape both readers below select, and to_cache_row() flattens.
+     *
+     * Keeping it in one place is what lets an upcoming session and a past one
+     * go through exactly the same conversions — minutes rather than seconds,
+     * Tehran dates, the customer-name fallback — instead of one of them
+     * quietly exporting Bookly's raw columns.
+     */
+    private static function session_columns() {
+        return 'ca.id AS caId,
+                        ca.created_at AS createdAt,
+                        a.start_date AS startDate,
+                        a.end_date AS endDate,
+                        a.staff_id AS staffId,
+                        st.full_name AS therapist,
+                        st.visibility AS staffVisibility,
+                        c.full_name AS customerFullName,
+                        c.first_name AS customerFirstName,
+                        c.last_name AS customerLastName,
+                        c.phone AS customerPhone,
+                        c.email AS customerEmail,
+                        a.custom_service_name AS customServiceName,
+                        s.title AS serviceTitle,
+                        s.duration AS serviceDuration';
+    }
+
+    /** The joins those columns are read from. */
+    private static function session_joins() {
+        global $wpdb;
+
+        $p = $wpdb->prefix;
+
+        return "FROM {$p}bookly_customer_appointments ca
+                   INNER JOIN {$p}bookly_appointments a ON a.id = ca.appointment_id
+                   LEFT JOIN {$p}bookly_staff st ON st.id = a.staff_id
+                   LEFT JOIN {$p}bookly_customers c ON c.id = ca.customer_id
+                   LEFT JOIN {$p}bookly_services s ON s.id = a.service_id";
+    }
+
+    /**
      * The next slice of uncached completed sessions.
      *
      * No OFFSET: every row this returns is cached before the next call, so the
@@ -127,30 +192,15 @@ class Bookly_Exports_Repository {
     public static function fetch_uncached( $limit ) {
         global $wpdb;
 
-        $p         = $wpdb->prefix;
         $cached    = Bookly_Exports_Installer::table_name();
         $completed = self::completed_condition();
+        $columns   = self::session_columns();
+        $joins     = self::session_joins();
 
         return $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT ca.id AS caId,
-                        ca.created_at AS createdAt,
-                        a.start_date AS startDate,
-                        a.end_date AS endDate,
-                        st.full_name AS therapist,
-                        c.full_name AS customerFullName,
-                        c.first_name AS customerFirstName,
-                        c.last_name AS customerLastName,
-                        c.phone AS customerPhone,
-                        c.email AS customerEmail,
-                        a.custom_service_name AS customServiceName,
-                        s.title AS serviceTitle,
-                        s.duration AS serviceDuration
-                   FROM {$p}bookly_customer_appointments ca
-                   INNER JOIN {$p}bookly_appointments a ON a.id = ca.appointment_id
-                   LEFT JOIN {$p}bookly_staff st ON st.id = a.staff_id
-                   LEFT JOIN {$p}bookly_customers c ON c.id = ca.customer_id
-                   LEFT JOIN {$p}bookly_services s ON s.id = a.service_id
+                "SELECT {$columns}
+                   {$joins}
                    LEFT JOIN {$cached} ch ON ch.caId = ca.id
                   WHERE {$completed} AND ch.caId IS NULL
                   ORDER BY ca.id ASC
@@ -159,6 +209,39 @@ class Bookly_Exports_Repository {
             ),
             ARRAY_A
         );
+    }
+
+    /**
+     * Sessions still ahead of us, already in the CSV's own shape.
+     *
+     * These are never cached — an upcoming booking can still be moved or called
+     * off — so they are read live and flattened through the same to_cache_row()
+     * the cached half goes through. Handing Bookly's own columns to the writer
+     * is what made a 45-minute appointment export as «2700»: bookly_services
+     * .duration is stored in seconds, and only duration_minutes() knows that.
+     */
+    public static function fetch_future() {
+        global $wpdb;
+
+        $columns  = self::session_columns();
+        $joins    = self::session_joins();
+        $upcoming = self::upcoming_condition();
+
+        $rows = $wpdb->get_results(
+            "SELECT {$columns}
+               {$joins}
+              WHERE {$upcoming}
+              ORDER BY a.start_date DESC, ca.id DESC",
+            ARRAY_A
+        );
+
+        $out = array();
+
+        foreach ( (array) $rows as $row ) {
+            $out[] = self::mark_archived( self::to_cache_row( $row ), $row );
+        }
+
+        return $out;
     }
 
     /**
@@ -246,12 +329,36 @@ class Bookly_Exports_Repository {
         return '' === $name ? null : $name;
     }
 
+    /**
+     * Mark an export row whose therapist Bookly has archived, so a reader can
+     * still tell the two apart in a report that deliberately keeps archived
+     * therapists' sessions in.
+     *
+     * $source is the joined row the visibility was read from, which is why the
+     * marker is never stored: it is decided when the file is written, so a
+     * therapist archived long after their sessions were cached still comes out
+     * marked on the next export.
+     */
+    private static function mark_archived( array $export, $source ) {
+        $archived = isset( $source['staffVisibility'] ) && 'archive' === $source['staffVisibility'];
+
+        if ( $archived && ! empty( $export['therapist'] ) ) {
+            $export['therapist'] .= self::ARCHIVED_SUFFIX;
+        }
+
+        return $export;
+    }
+
     /** Flatten a joined row into the cache table's shape. */
     public static function to_cache_row( $row ) {
         $service = ! empty( $row['customServiceName'] ) ? $row['customServiceName'] : $row['serviceTitle'];
 
         return array(
             'caId'            => (int) $row['caId'],
+            // 0 when the appointment names no staff, or the staff row has been
+            // deleted outright: no staff id matches it, so such a row simply
+            // never picks the archived marker up.
+            'staffId'         => isset( $row['staffId'] ) ? (int) $row['staffId'] : 0,
             'appointmentDate' => self::to_tehran( $row['startDate'] ),
             'therapist'       => $row['therapist'],
             'customerName'    => self::customer_name( $row ),
@@ -277,13 +384,13 @@ class Bookly_Exports_Repository {
         }
 
         $table   = Bookly_Exports_Installer::table_name();
-        $columns = array( 'caId', 'appointmentDate', 'therapist', 'customerName', 'customerPhone', 'created', 'customerEmail', 'services', 'duration' );
+        $columns = array( 'caId', 'staffId', 'appointmentDate', 'therapist', 'customerName', 'customerPhone', 'created', 'customerEmail', 'services', 'duration' );
 
         $placeholders = array();
         $values       = array();
 
         foreach ( $rows as $row ) {
-            $placeholders[] = '(%d, %s, %s, %s, %s, %s, %s, %s, %d)';
+            $placeholders[] = '(%d, %d, %s, %s, %s, %s, %s, %s, %s, %d)';
             foreach ( $columns as $column ) {
                 $values[] = $row[ $column ];
             }
@@ -305,54 +412,40 @@ class Bookly_Exports_Repository {
      * OFFSETs, and the paged write would duplicate some rows while dropping
      * others. Nothing is cached while the CSV is being written, so the set
      * itself stays stable across the batches.
+     *
+     * The staff join is there only to read the therapist's visibility now, at
+     * export time; the marker is not part of the cached name.
      */
     public static function fetch_cached( $offset, $limit ) {
         global $wpdb;
 
-        $table   = Bookly_Exports_Installer::table_name();
-        $columns = implode( '`, `', array_keys( self::csv_columns() ) );
+        $p     = $wpdb->prefix;
+        $table = Bookly_Exports_Installer::table_name();
 
-        return $wpdb->get_results(
+        $select = array();
+        foreach ( array_keys( self::csv_columns() ) as $column ) {
+            $select[] = "ch.`{$column}`";
+        }
+
+        $rows = $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT `{$columns}` FROM {$table} ORDER BY appointmentDate DESC, id DESC LIMIT %d OFFSET %d",
+                'SELECT ' . implode( ', ', $select ) . ", st.visibility AS staffVisibility
+                   FROM {$table} ch
+                   LEFT JOIN {$p}bookly_staff st ON st.id = ch.staffId
+                  ORDER BY ch.appointmentDate DESC, ch.id DESC
+                  LIMIT %d OFFSET %d",
                 $limit,
                 $offset
             ),
             ARRAY_A
         );
-    }
 
-    public static function fetch_future() {
-        global $wpdb;
-        $p         = $wpdb->prefix;
+        $out = array();
 
-        return $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT ca.id AS caId,
-                        ca.created_at AS created,
-                        a.start_date AS appointmentDate,
-                        a.end_date AS endDate,
-                        st.full_name AS therapist,
-                        c.full_name AS customerName,
-                        c.first_name AS customerFirstName,
-                        c.last_name AS customerLastName,
-                        c.phone AS customerPhone,
-                        c.email AS customerEmail,
-                        a.custom_service_name AS customServiceName,
-                        s.title AS serviceTitle,
-                        s.duration AS duration,
-                        IFNULL(a.custom_service_name, s.title) AS services
-                   FROM {$p}bookly_customer_appointments ca
-                   INNER JOIN {$p}bookly_appointments a ON a.id = ca.appointment_id
-                   LEFT JOIN {$p}bookly_staff st ON st.id = a.staff_id
-                   LEFT JOIN {$p}bookly_customers c ON c.id = ca.customer_id
-                   LEFT JOIN {$p}bookly_services s ON s.id = a.service_id
-                  WHERE start_date >= %s
-                  AND ca.status NOT IN ('cancelled', 'rejected', 'waitlisted')
-                  ORDER BY a.start_date DESC",
-                self::now_in_export_timezone()
-            ),
-            ARRAY_A
-        );
+        foreach ( (array) $rows as $row ) {
+            $out[] = self::mark_archived( $row, $row );
+        }
+
+        return $out;
     }
 }
