@@ -244,6 +244,111 @@ class Bookly_Exports_Repository {
         return $out;
     }
 
+    // --- Reading straight from Bookly, cache table not involved ---------------
+
+    /**
+     * Every session the file should carry, past or upcoming, in one condition.
+     *
+     * The cached export splits the history at "now" because only one half of
+     * it is stored; a read straight from Bookly has no such seam, so it takes
+     * everything that has a date and did not get called off. Same statuses as
+     * both halves above, so the two exports agree row for row.
+     */
+    private static function live_condition() {
+        return 'a.start_date IS NOT NULL' . self::status_condition();
+    }
+
+    /** How many rows a live export will write — for the progress bar. */
+    public static function live_count() {
+        global $wpdb;
+
+        $p         = $wpdb->prefix;
+        $condition = self::live_condition();
+
+        return (int) $wpdb->get_var(
+            "SELECT COUNT(*)
+               FROM {$p}bookly_customer_appointments ca
+               INNER JOIN {$p}bookly_appointments a ON a.id = ca.appointment_id
+              WHERE {$condition}"
+        );
+    }
+
+    /**
+     * The next slice of sessions read directly from Bookly, newest first.
+     *
+     * Same order the cached file comes out in — upcoming sessions at the top,
+     * then the completed ones by date — only here it falls out of a single
+     * ORDER BY instead of two reads stitched together.
+     *
+     * Paged by keyset rather than OFFSET: the table is live, so a booking made
+     * between two batches would shift every later row by one and an OFFSET
+     * walk would write one row twice and skip another. Carrying the last row's
+     * (start_date, id) forward instead makes each batch start exactly where the
+     * previous one stopped, whatever was inserted meanwhile. The pair is
+     * unique per row, so the walk is total.
+     *
+     * @param string|null $after_date start_date of the last row written, in
+     *                                Bookly's own clock, or null for the first batch
+     * @param int         $after_id   ca.id of that row
+     * @return array{rows: array[], cursor: array|null} rows in the CSV's shape,
+     *                                and where the next call should resume, or
+     *                                null when this was the last slice
+     */
+    public static function fetch_live( $after_date, $after_id, $limit ) {
+        global $wpdb;
+
+        $columns   = self::session_columns();
+        $joins     = self::session_joins();
+        $condition = self::live_condition();
+
+        if ( null === $after_date ) {
+            $sql = $wpdb->prepare(
+                "SELECT {$columns}
+                   {$joins}
+                  WHERE {$condition}
+                  ORDER BY a.start_date DESC, ca.id DESC
+                  LIMIT %d",
+                $limit
+            );
+        } else {
+            $sql = $wpdb->prepare(
+                "SELECT {$columns}
+                   {$joins}
+                  WHERE {$condition}
+                    AND (a.start_date < %s OR (a.start_date = %s AND ca.id < %d))
+                  ORDER BY a.start_date DESC, ca.id DESC
+                  LIMIT %d",
+                $after_date,
+                $after_date,
+                (int) $after_id,
+                $limit
+            );
+        }
+
+        $rows   = (array) $wpdb->get_results( $sql, ARRAY_A );
+        $out    = array();
+        $cursor = null;
+
+        foreach ( $rows as $row ) {
+            $out[] = self::mark_archived( self::to_cache_row( $row ), $row );
+            // The raw start_date, not the Tehran one: the cursor is compared
+            // against the column, so it has to be on the column's clock.
+            $cursor = array(
+                'startDate' => $row['startDate'],
+                'caId'      => (int) $row['caId'],
+            );
+        }
+
+        if ( count( $rows ) < $limit ) {
+            $cursor = null;
+        }
+
+        return array(
+            'rows'   => $out,
+            'cursor' => $cursor,
+        );
+    }
+
     /**
      * Drop anything cached that is not a completed session.
      *

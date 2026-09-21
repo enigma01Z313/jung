@@ -3,7 +3,7 @@ Author: Farzin Ahamadi
 Requires at least: 5.6
 Tested up to: 6.6
 Requires PHP: 7.2
-Stable tag: 1.2.0
+Stable tag: 1.3.0
 
 Caches Bookly's completed sessions into a flat table and exports them to CSV,
 both in progress-tracked batches. The last file produced is kept for
@@ -88,18 +88,42 @@ the file, or in neither.
 
 == How the export runs ==
 
-One button. Pressing **Export CSV** runs two batched phases back to back, each
-driven from the browser so no single request has to survive the whole history:
+Pressing **Export CSV** runs two batched phases back to back, each driven from
+the browser so no single request has to survive the whole history:
 
 1. **Cache** — sessions completed since the last run are inserted 100 at a time.
    The bar tracks the count still outstanding, which the server reports back
    after each write, so it reflects rows actually stored.
-2. **CSV** — the cached rows are appended to a file 1000 at a time, newest
+2. **CSV** — the cached rows are appended to a file 10000 at a time, newest
    session first. The file is opened with a UTF-8 BOM so Excel reads Persian
    names correctly.
 
 When the last slice is written the browser is sent to the download endpoint, and
 the same file is offered as a **Download CSV** link on the page.
+
+== Export without cache ==
+
+The second button, **Export without cache**, produces the same file — same
+columns, same statuses, same newest-first order with the upcoming sessions at
+the top — without reading or writing the cache table at all. Every row is read
+straight from Bookly, 10000 per request, as Bookly holds it at that moment.
+
+Use it when the cache is in doubt: a session edited in Bookly after it was
+cached, a customer's phone corrected, a therapist renamed. The regular export
+would still carry the cached copy of such a row; this one carries what Bookly
+says today. It re-reads the whole history on every run, so it is the slower of
+the two and not the everyday choice.
+
+The batches are paged by a cursor — the last row's date and id — rather than an
+offset, so a booking made while the file is being written cannot shift the
+later rows and cause one to be written twice or skipped. Where the cached
+export stitches "upcoming" and "completed" together from two reads, this one
+has no seam: one condition, one ORDER BY, and the same rows fall out in the
+same order.
+
+The file takes the same slot as the regular export (see *The file*), so the
+**Download CSV** link on the page always points at whichever run finished last,
+and its name says which kind it was.
 
 == The file ==
 
@@ -111,6 +135,10 @@ The name carries the moment the export was taken, on the same Tehran clock the
 dates inside it use:
 
     bookly-completed-sessions-2026-09-02_14-35-07.csv
+
+A run made with *Export without cache* says so in its name:
+
+    bookly-completed-sessions-live-2026-09-21_09-12-40.csv
 
 **The last file is kept.** It stays in the folder, and its link stays on the
 screen, so it can be fetched again later without re-running anything. A new
@@ -125,6 +153,13 @@ it again after more sessions have passed caches just those, then exports
 everything.
 
 == Changelog ==
+
+= 1.3.0 =
+* Added: an **Export without cache** button that reads every session straight
+  from Bookly, 10000 rows per request, and writes the same file — same
+  columns, same order, upcoming sessions first — without touching the cache
+  table. Its batches are paged by cursor, so a booking made mid-run cannot
+  shift the rows.
 
 = 1.2.0 =
 * Added: sessions that have not happened yet are part of the export, at the top

@@ -8,6 +8,7 @@
     }
 
     var runBtn    = document.getElementById( 'bookly-exports-run' );
+    var liveBtn   = document.getElementById( 'bookly-exports-run-live' );
     var progress  = document.getElementById( 'bookly-exports-progress' );
     var phaseEl   = document.getElementById( 'bookly-exports-phase' );
     var barEl     = document.getElementById( 'bookly-exports-bar' );
@@ -20,7 +21,7 @@
     var lastLabel = document.getElementById( 'bookly-exports-last-label' );
     var lastLink  = document.getElementById( 'bookly-exports-last-link' );
 
-    if ( ! runBtn ) {
+    if ( ! runBtn || ! liveBtn ) {
         return;
     }
 
@@ -160,14 +161,50 @@
         } );
     }
 
-    // One press does both phases: catch the table up on what has completed since
-    // last time, then export all of it.
-    runBtn.addEventListener( 'click', function () {
-        runBtn.disabled = true;
+    /**
+     * The no-cache run — one phase: read Bookly directly, BooklyExports.liveBatch
+     * rows per request, and append each slice to the file.
+     *
+     * The server hands back a cursor (the last row's date and id) and each
+     * request sends it in again, so a batch resumes exactly where the previous
+     * one stopped rather than at an offset that a booking made meanwhile could
+     * have shifted. The running tally rides along the same way, since nothing
+     * server-side remembers it between requests.
+     */
+    function buildLive() {
+        return post( 'bookly_exports_live_start', {} ).then( function ( start ) {
+            setPhase( cfg.i18n.buildingLive );
+            setProgress( 0, start.total );
+
+            function step( written, cursor ) {
+                var params = { stamp: start.stamp, written: written };
+                if ( cursor ) {
+                    params.afterDate = cursor.startDate;
+                    params.afterId   = cursor.caId;
+                }
+
+                return post( 'bookly_exports_live_batch', params ).then( function ( data ) {
+                    setProgress( data.written, data.total );
+
+                    if ( data.done ) {
+                        return data;
+                    }
+                    return step( data.written, data.cursor );
+                } );
+            }
+
+            return step( 0, null );
+        } );
+    }
+
+    // Both buttons share one progress panel and one download slot, so only one
+    // run at a time: either press locks both until it finishes.
+    function run( build ) {
+        runBtn.disabled  = true;
+        liveBtn.disabled = true;
         reset();
 
-        cacheAll()
-            .then( buildCsv )
+        build()
             .then( function ( result ) {
                 setPhase( cfg.i18n.ready );
                 showDone( cfg.i18n.ready );
@@ -187,7 +224,21 @@
             .then( refreshCounts )
             .catch( function () {} )
             .then( function () {
-                runBtn.disabled = false;
+                runBtn.disabled  = false;
+                liveBtn.disabled = false;
             } );
+    }
+
+    // One press does both phases: catch the table up on what has completed since
+    // last time, then export all of it.
+    runBtn.addEventListener( 'click', function () {
+        run( function () {
+            return cacheAll().then( buildCsv );
+        } );
+    } );
+
+    // The cache is neither read nor written here; the file is the same shape.
+    liveBtn.addEventListener( 'click', function () {
+        run( buildLive );
     } );
 }() );

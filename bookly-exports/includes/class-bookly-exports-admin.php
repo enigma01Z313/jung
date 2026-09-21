@@ -77,11 +77,13 @@ class Bookly_Exports_Admin {
                 'nonce'      => wp_create_nonce( Bookly_Exports_Ajax::NONCE ),
                 'cacheBatch' => BOOKLY_EXPORTS_CACHE_BATCH,
                 'csvBatch'   => BOOKLY_EXPORTS_CSV_BATCH,
+                'liveBatch'  => BOOKLY_EXPORTS_LIVE_BATCH,
                 'i18n'       => array(
                     'caching'    => __( 'Caching newly completed sessions…', 'bookly-exports' ),
                     'cached'     => __( 'Every completed session is cached.', 'bookly-exports' ),
                     'nothingNew' => __( 'Nothing new to cache — every completed session is already in the table.', 'bookly-exports' ),
                     'building'   => __( 'Building the CSV file…', 'bookly-exports' ),
+                    'buildingLive' => __( 'Reading sessions straight from Bookly and building the CSV file…', 'bookly-exports' ),
                     'ready'      => __( 'The file is ready — your download should start automatically.', 'bookly-exports' ),
                     'empty'      => __( 'There is nothing to export yet.', 'bookly-exports' ),
                     'failed'     => __( 'Something went wrong. Please try again.', 'bookly-exports' ),
@@ -115,6 +117,9 @@ class Bookly_Exports_Admin {
                 <p class="bookly-exports__lead">
                     <?php esc_html_e( 'Only sessions whose date has already passed are reported, whatever therapist they belong to — archived ones included. Pressing Export CSV caches the sessions completed since the last run and then writes the whole table out, both in batches so a long history never trips the request timeout.', 'bookly-exports' ); ?>
                 </p>
+                <p class="bookly-exports__lead">
+                    <?php esc_html_e( 'Export without cache skips the table and reads every session straight from Bookly as it is right now — the same rows, columns and order as the regular file — so a session edited after it was cached comes out as Bookly holds it today. It re-reads the whole history each time, so it is the slower of the two.', 'bookly-exports' ); ?>
+                </p>
 
                 <div class="bookly-exports__stats">
                     <div class="bookly-exports__stat">
@@ -127,10 +132,14 @@ class Bookly_Exports_Admin {
                     </div>
                 </div>
 
-                <p>
+                <p class="bookly-exports__actions">
                     <?php // One button: caching whatever is newly completed is part of exporting, not a separate step to remember. ?>
                     <button type="button" class="button button-primary button-hero" id="bookly-exports-run">
                         <?php esc_html_e( 'Export CSV', 'bookly-exports' ); ?>
+                    </button>
+                    <?php // The second reads Bookly directly and never consults or writes the cache table. ?>
+                    <button type="button" class="button button-secondary button-hero" id="bookly-exports-run-live">
+                        <?php esc_html_e( 'Export without cache', 'bookly-exports' ); ?>
                     </button>
                 </p>
 

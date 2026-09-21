@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Simyatech Bookly Reports
  * Description: Caches Bookly's completed sessions into a flat table and exports them to CSV, both in progress-tracked batches so a large history never times out.
- * Version:     1.2.0
+ * Version:     1.3.0
  * Author:      Farzin Ahamadi
  * Text Domain: bookly-exports
  */
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'BOOKLY_EXPORTS_VERSION', '1.2.0' );
+define( 'BOOKLY_EXPORTS_VERSION', '1.3.0' );
 define( 'BOOKLY_EXPORTS_FILE', __FILE__ );
 define( 'BOOKLY_EXPORTS_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BOOKLY_EXPORTS_URL', plugin_dir_url( __FILE__ ) );
@@ -24,6 +24,9 @@ define( 'BOOKLY_EXPORTS_CACHE_BATCH', 100 );
 
 /** Rows written to the CSV per AJAX round-trip. */
 define( 'BOOKLY_EXPORTS_CSV_BATCH', 10000 );
+
+/** Rows read straight from Bookly per AJAX round-trip, for the no-cache export. */
+define( 'BOOKLY_EXPORTS_LIVE_BATCH', 10000 );
 
 require_once BOOKLY_EXPORTS_PATH . 'includes/class-bookly-exports-installer.php';
 require_once BOOKLY_EXPORTS_PATH . 'includes/class-bookly-exports-repository.php';

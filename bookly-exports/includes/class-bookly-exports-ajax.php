@@ -23,6 +23,8 @@ class Bookly_Exports_Ajax {
         add_action( 'wp_ajax_bookly_exports_cache_batch', array( __CLASS__, 'cache_batch' ) );
         add_action( 'wp_ajax_bookly_exports_csv_start', array( __CLASS__, 'csv_start' ) );
         add_action( 'wp_ajax_bookly_exports_csv_batch', array( __CLASS__, 'csv_batch' ) );
+        add_action( 'wp_ajax_bookly_exports_live_start', array( __CLASS__, 'live_start' ) );
+        add_action( 'wp_ajax_bookly_exports_live_batch', array( __CLASS__, 'live_batch' ) );
         add_action( 'wp_ajax_bookly_exports_download', array( __CLASS__, 'download' ) );
     }
 
@@ -113,10 +115,12 @@ class Bookly_Exports_Ajax {
 
     /**
      * The name a run writes under: the moment the export was taken, on the same
-     * Tehran clock the dates inside the file use.
+     * Tehran clock the dates inside the file use. A live export (read straight
+     * from Bookly, see live_start) says so in its name, so the two kinds can be
+     * told apart in the folder and in a download list.
      */
-    private static function file_name_for( $stamp ) {
-        return 'bookly-completed-sessions-' . $stamp . '.csv';
+    private static function file_name_for( $stamp, $live = false ) {
+        return 'bookly-completed-sessions-' . ( $live ? 'live-' : '' ) . $stamp . '.csv';
     }
 
     /**
@@ -129,12 +133,70 @@ class Bookly_Exports_Ajax {
     }
 
     /** The half-written file a run appends to before it is published. */
-    private static function part_file( $stamp ) {
+    private static function part_file( $stamp, $live = false ) {
         if ( ! self::valid_stamp( $stamp ) ) {
             return null;
         }
 
-        return self::export_dir() . '/' . self::file_name_for( $stamp ) . '.part';
+        return self::export_dir() . '/' . self::file_name_for( $stamp, $live ) . '.part';
+    }
+
+    /**
+     * A fresh .part with the heading row, ready to be appended to. Shared by
+     * both kinds of run so they can never disagree on the BOM or the headings.
+     *
+     * The UTF-8 BOM is what makes Excel read Persian names and the Tehran dates
+     * correctly instead of as mojibake.
+     *
+     * @return string the stamp the file was opened under
+     */
+    private static function open_part_file( $live = false ) {
+        $dir = self::export_dir();
+
+        // Only half-written files go now; the previous finished export is kept
+        // until this one is complete, so a run that dies partway through doesn't
+        // take the last good download with it.
+        foreach ( (array) glob( $dir . '/*.part' ) as $stale ) {
+            @unlink( $stale );
+        }
+
+        $stamp = str_replace( ' ', '_', str_replace( ':', '-', Bookly_Exports_Repository::now_in_export_timezone() ) );
+        $file  = self::part_file( $stamp, $live );
+
+        $handle = $file ? fopen( $file, 'w' ) : false;
+        if ( false === $handle ) {
+            wp_send_json_error( array( 'message' => __( 'The export file could not be created.', 'bookly-exports' ) ), 500 );
+        }
+
+        fwrite( $handle, chr( 0xEF ) . chr( 0xBB ) . chr( 0xBF ) );
+        fputcsv( $handle, array_values( Bookly_Exports_Repository::csv_columns() ) );
+        fclose( $handle );
+
+        return $stamp;
+    }
+
+    /**
+     * Append rows already in the CSV's shape to an open .part.
+     *
+     * @return int rows written
+     */
+    private static function append_rows( $file, array $rows ) {
+        $handle = fopen( $file, 'a' );
+        if ( false === $handle ) {
+            wp_send_json_error( array( 'message' => __( 'The export file could not be written to.', 'bookly-exports' ) ), 500 );
+        }
+
+        $columns = array_keys( Bookly_Exports_Repository::csv_columns() );
+        foreach ( $rows as $row ) {
+            $line = array();
+            foreach ( $columns as $column ) {
+                $line[] = isset( $row[ $column ] ) ? $row[ $column ] : '';
+            }
+            fputcsv( $handle, $line );
+        }
+        fclose( $handle );
+
+        return count( $rows );
     }
 
     /**
@@ -164,12 +226,7 @@ class Bookly_Exports_Ajax {
 
     // --- CSV -----------------------------------------------------------------
 
-    /**
-     * Open a fresh file and write the heading row.
-     *
-     * The UTF-8 BOM is what makes Excel read Persian names and the Tehran dates
-     * correctly instead of as mojibake.
-     */
+    /** Open a fresh file and write the heading row. */
     public static function csv_start() {
         self::guard();
 
@@ -179,26 +236,7 @@ class Bookly_Exports_Ajax {
             wp_send_json_error( array( 'message' => __( 'There is nothing to export yet.', 'bookly-exports' ) ), 400 );
         }
 
-        $dir = self::export_dir();
-
-        // Only half-written files go now; the previous finished export is kept
-        // until this one is complete, so a run that dies partway through doesn't
-        // take the last good download with it.
-        foreach ( (array) glob( $dir . '/*.part' ) as $stale ) {
-            @unlink( $stale );
-        }
-
-        $stamp = str_replace( ' ', '_', str_replace( ':', '-', Bookly_Exports_Repository::now_in_export_timezone() ) );
-        $file  = self::part_file( $stamp );
-
-        $handle = $file ? fopen( $file, 'w' ) : false;
-        if ( false === $handle ) {
-            wp_send_json_error( array( 'message' => __( 'The export file could not be created.', 'bookly-exports' ) ), 500 );
-        }
-
-        fwrite( $handle, chr( 0xEF ) . chr( 0xBB ) . chr( 0xBF ) );
-        fputcsv( $handle, array_values( Bookly_Exports_Repository::csv_columns() ) );
-        fclose( $handle );
+        $stamp = self::open_part_file();
 
         wp_send_json_success(
             array(
@@ -233,20 +271,7 @@ class Bookly_Exports_Ajax {
             self::remember_future_count( $stamp, count( $future ) );
         }
 
-        $handle = fopen( $file, 'a' );
-        if ( false === $handle ) {
-            wp_send_json_error( array( 'message' => __( 'The export file could not be written to.', 'bookly-exports' ) ), 500 );
-        }
-
-        $columns = array_keys( Bookly_Exports_Repository::csv_columns() );
-        foreach ( $rows as $row ) {
-            $line = array();
-            foreach ( $columns as $column ) {
-                $line[] = isset( $row[ $column ] ) ? $row[ $column ] : '';
-            }
-            fputcsv( $handle, $line );
-        }
-        fclose( $handle );
+        self::append_rows( $file, $rows );
 
         // The offset pages the cache and nothing else: the upcoming rows sit
         // outside it, so counting them here would step over that many cached
@@ -264,6 +289,83 @@ class Bookly_Exports_Ajax {
         if ( $done ) {
             // The finished file's tally is every line in it, upcoming included.
             $response['last'] = self::publish( $stamp, $written + self::forget_future_count( $stamp ) );
+        }
+
+        wp_send_json_success( $response );
+    }
+
+    // --- CSV straight from Bookly, no cache ----------------------------------
+
+    /**
+     * Open a fresh file for a run that never touches the cache table.
+     *
+     * Same headings, same folder, same download slot as the cached export; the
+     * difference is only where the rows come from. Useful when the cache is
+     * suspect — a session edited in Bookly after it was cached, a therapist
+     * renamed — since every row is read as Bookly holds it right now.
+     */
+    public static function live_start() {
+        self::guard();
+
+        $total = Bookly_Exports_Repository::live_count();
+
+        if ( 0 === $total ) {
+            wp_send_json_error( array( 'message' => __( 'There is nothing to export yet.', 'bookly-exports' ) ), 400 );
+        }
+
+        $stamp = self::open_part_file( true );
+
+        wp_send_json_success(
+            array(
+                'stamp'   => $stamp,
+                'total'   => $total,
+                'written' => 0,
+                'cursor'  => null,
+            )
+        );
+    }
+
+    /**
+     * Append the next BOOKLY_EXPORTS_LIVE_BATCH rows read straight from Bookly.
+     *
+     * The browser hands back the cursor the previous batch ended on, plus its
+     * own running tally; neither is trusted for anything beyond "where to
+     * resume" and the progress bar. The cursor is a datetime and an id, so both
+     * are checked for shape before they go anywhere near a query.
+     */
+    public static function live_batch() {
+        self::guard();
+
+        $stamp   = isset( $_POST['stamp'] ) ? sanitize_text_field( wp_unslash( $_POST['stamp'] ) ) : '';
+        $written = isset( $_POST['written'] ) ? max( 0, (int) $_POST['written'] ) : 0;
+        $file    = self::part_file( $stamp, true );
+
+        if ( ! $file || ! file_exists( $file ) ) {
+            wp_send_json_error( array( 'message' => __( 'The export file is no longer available. Please start again.', 'bookly-exports' ) ), 400 );
+        }
+
+        $after_date = isset( $_POST['afterDate'] ) ? sanitize_text_field( wp_unslash( $_POST['afterDate'] ) ) : '';
+        $after_id   = isset( $_POST['afterId'] ) ? (int) $_POST['afterId'] : 0;
+
+        if ( '' === $after_date || ! preg_match( '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $after_date ) ) {
+            $after_date = null;
+            $after_id   = 0;
+        }
+
+        $slice = Bookly_Exports_Repository::fetch_live( $after_date, $after_id, BOOKLY_EXPORTS_LIVE_BATCH );
+
+        $written += self::append_rows( $file, $slice['rows'] );
+
+        $done     = null === $slice['cursor'];
+        $response = array(
+            'written' => $written,
+            'total'   => Bookly_Exports_Repository::live_count(),
+            'cursor'  => $slice['cursor'],
+            'done'    => $done,
+        );
+
+        if ( $done ) {
+            $response['last'] = self::publish( $stamp, $written, true );
         }
 
         wp_send_json_success( $response );
@@ -300,10 +402,10 @@ class Bookly_Exports_Ajax {
      *
      * @return array the same shape last_export() returns
      */
-    private static function publish( $stamp, $rows ) {
+    private static function publish( $stamp, $rows, $live = false ) {
         $dir   = self::export_dir();
-        $name  = self::file_name_for( $stamp );
-        $part  = self::part_file( $stamp );
+        $name  = self::file_name_for( $stamp, $live );
+        $part  = self::part_file( $stamp, $live );
         $final = $dir . '/' . $name;
 
         if ( ! @rename( $part, $final ) ) {
