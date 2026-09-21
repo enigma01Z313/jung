@@ -12,14 +12,18 @@ if ( ! defined( 'ABSPATH' ) ) {
  * keyed on their ids.
  *
  * What gets cached is every *completed* session: one whose start date is already
- * in the past and whose status doesn't say it never happened. Filtering on
+ * in the past and whose status is not on the excluded list. Filtering on
  * `status = 'approved'` (what this used to do) quietly dropped whole therapists
- * from the report — Bookly moves a past booking on to `done`, and a site running
- * Bookly Pro's custom statuses can move it somewhere else again — so an archived
- * therapist, whose sessions are by definition all in the past, could end up with
- * nothing left in the export at all. Naming the statuses that mean "didn't
- * happen" and taking everything else keeps that from recurring for a status
- * added later.
+ * from the report — a site running Bookly Pro's custom statuses can move a past
+ * booking somewhere else — so an archived therapist, whose sessions are by
+ * definition all in the past, could end up with nothing left in the export at
+ * all. Naming the statuses to leave out and taking everything else keeps that
+ * from recurring for a status added later.
+ *
+ * `done` is on that list by request: a session Bookly (or a staff member) has
+ * marked done is settled and stays out of this report, in both the cached and
+ * the direct export. The same list drives every reader and the purge, so the
+ * three can never disagree about it.
  *
  * Sessions still ahead of us are read straight from Bookly at export time
  * (fetch_future) rather than cached: they are few, and a booking that has not
@@ -51,13 +55,15 @@ class Bookly_Exports_Repository {
     }
 
     /**
-     * Statuses that mean the session did not take place, and so is not
-     * "completed" however long ago its date was.
+     * Statuses left out of the report, whatever the session's date: the three
+     * that mean it did not take place, and `done`, which means it is already
+     * settled. Applied by every reader — cached, upcoming and direct — and by
+     * the purge, so a cached row later marked done drops out on the next run.
      */
     public static function excluded_statuses() {
         return apply_filters(
             'bookly_exports_excluded_statuses',
-            array( 'cancelled', 'rejected', 'waitlisted' )
+            array( 'cancelled', 'rejected', 'waitlisted', 'done' )
         );
     }
 

@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Bookly_Exports_Installer {
 
     const VERSION_OPTION = 'bookly_exports_db_version';
-    const DB_VERSION     = '1.2.0';
+    const DB_VERSION     = '1.3.1';
 
     /** Fully-qualified name of the cache table. */
     public static function table_name() {
@@ -72,11 +72,11 @@ class Bookly_Exports_Installer {
 
         dbDelta( $sql );
 
-        // 1.1.0 narrowed the table to completed sessions only. The schema didn't
-        // move, but anything an earlier version cached under the old rule (any
-        // approved appointment, future ones included) has to go — running the
+        // 1.1.0 narrowed the table to completed sessions only, and 1.3.1 took
+        // `done` off the report. Neither moved the schema, but anything an
+        // earlier version cached under the older rule has to go — running the
         // purge here means it happens once, on upgrade, rather than on a hot
-        // path.
+        // path, and the counts on the screen are right straight away.
         if ( Bookly_Exports_Repository::bookly_installed() ) {
             Bookly_Exports_Repository::purge_uncompleted();
 

@@ -3,7 +3,7 @@ Author: Farzin Ahamadi
 Requires at least: 5.6
 Tested up to: 6.6
 Requires PHP: 7.2
-Stable tag: 1.3.0
+Stable tag: 1.3.1
 
 Caches Bookly's completed sessions into a flat table and exports them to CSV,
 both in progress-tracked batches. The last file produced is kept for
@@ -22,19 +22,24 @@ also linked from the Jung plugin's *Finances* menu. Both point at the same page.
 
 == What counts as a completed session ==
 
-A session is cached once **its date has passed** and its status doesn't say it
-never happened — everything except `cancelled`, `rejected` and `waitlisted`
-(adjustable through the `bookly_exports_excluded_statuses` filter). Future
-bookings are not cached at all — they are read live when the file is written
-(see *Upcoming sessions*), because one can still be moved or called off.
+A session is cached once **its date has passed** and its status is not on the
+excluded list — everything except `cancelled`, `rejected`, `waitlisted` and
+`done` (adjustable through the `bookly_exports_excluded_statuses` filter).
+Future bookings are not cached at all — they are read live when the file is
+written (see *Upcoming sessions*), because one can still be moved or called off.
+
+The same list applies to **every** part of the report: the cached rows, the
+upcoming rows, and the *Export without cache* file. A cached session later
+marked `done` is dropped from the table by the purge that runs at the start of
+each export (and once on upgrade), so it disappears from the next file rather
+than lingering.
 
 Earlier versions cached on `status = 'approved'` instead, which silently dropped
-whole therapists from the report: Bookly moves a past booking on to `done`, and a
-site running Bookly Pro's custom statuses can move it somewhere else again, so an
-**archived therapist** — whose sessions are by definition all in the past — could
-end up with nothing left in the export at all. Taking every status but the ones
-that mean "didn't happen" fixes that, and keeps fixing it for any status added
-later.
+whole therapists from the report: a site running Bookly Pro's custom statuses
+can move a past booking somewhere else, so an **archived therapist** — whose
+sessions are by definition all in the past — could end up with nothing left in
+the export at all. Naming the statuses to leave out and taking everything else
+fixes that, and keeps fixing it for any status added later.
 
 Staff visibility never excludes anyone, and the staff join is a LEFT JOIN, so an
 archived (or removed) therapist's past sessions still make it into the file. It
@@ -153,6 +158,11 @@ it again after more sessions have passed caches just those, then exports
 everything.
 
 == Changelog ==
+
+= 1.3.1 =
+* Changed: sessions with status `done` are left out of the report — the cached
+  export, its upcoming rows, and the export without cache alike. Rows already
+  cached as done are purged once on upgrade.
 
 = 1.3.0 =
 * Added: an **Export without cache** button that reads every session straight
